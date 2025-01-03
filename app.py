@@ -16,15 +16,15 @@ def compute_prmt_distribution(M, Kd_PM, S, Kd_PS, I, Kd_PI, Kd_PMI, Kd_PSI):
       5) bound to MTA + inhibitor (P_MI)
       6) bound to SAM + inhibitor (P_SI)
 
-    All Kd and concentration values must be in consistent units (e.g. µM).
+    All Kd and concentration values must be in consistent units (e.g., µM).
 
     Returns a dict with fractions for each microstate.
     """
     alpha_M  = M / Kd_PM   # dimensionless ratio for MTA binding
     alpha_S  = S / Kd_PS   # ratio for SAM binding
-    alpha_Ip = I / Kd_PI   # ratio for inhibitor binding free protein
-    alpha_IM = I / Kd_PMI  # ratio for inhibitor binding MTA-bound protein
-    alpha_IS = I / Kd_PSI  # ratio for inhibitor binding SAM-bound protein
+    alpha_Ip = I / Kd_PI   # ratio for inhibitor binding (protein-free)
+    alpha_IM = I / Kd_PMI  # ratio for inhibitor binding (MTA-bound)
+    alpha_IS = I / Kd_PSI  # ratio for inhibitor binding (SAM-bound)
 
     # Microstate weights
     W_free = 1.0
@@ -45,25 +45,20 @@ def compute_prmt_distribution(M, Kd_PM, S, Kd_PS, I, Kd_PI, Kd_PMI, Kd_PSI):
         "P_SI":   W_PSI  / Z,
     }
 
-
 #############################
 #  2) Main Streamlit App
 #############################
 def main():
-    st.title("Interactive PRMT Inhibition App (Log-scale x-axis)")
+    st.title("PRMT Inhibition App")
 
     st.markdown(
         """
-        This app computes the *functional fraction* of PRMT (i.e., \\(P_{\\mathrm{free}} + P_{S}\\)) 
-        under two cell conditions (**Healthy** vs. **MTAP-deleted**), for both **PRMT5** and **PRMT1**. 
-        It uses **Altair** to display the x-axis in *log scale*.  
-        
-        **Instructions**:  
-        1. Adjust the parameters in the sidebar (MTA, SAM, Kd values, etc.).  
-        2. A range of inhibitor concentrations (in nM) is swept on a *log scale*.  
-        3. See how the “functional fraction” curves shift for PRMT5 and PRMT1!
+        This app computes the *functional fraction* of PRMT (bound to SAM and free) 
+        in **Healthy** vs. **MTAP-deleted** cells at varying inhibitor concentrations.
         """
     )
+
+
 
     # --- Sidebar Inputs ---
     with st.sidebar:
@@ -80,15 +75,39 @@ def main():
         Kd_PM_1 = st.number_input("Kd(PRMT1–MTA)", min_value=0.0001, value=50.0, step=1.0)
         Kd_PS_1 = st.number_input("Kd(PRMT1–SAM)", min_value=0.0001, value=10.0, step=0.1)
 
-        st.header("Inhibitor Kd (µM)")
-        Kd_PI   = st.number_input("Kd(Inhib–free)", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
-        Kd_PMI  = st.number_input("Kd(Inhib–MTA-bound)", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
-        Kd_PSI  = st.number_input("Kd(Inhib–SAM-bound)", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
+        st.header("Inhibitor Selectivity Setup")
+
+        # 1) Kd(Inhib–MTA) in nM (number_input)
+        kd_inhib_mta_nM = st.number_input(
+            "Kd(Inhib–PRMT–MTA) [nM]",
+            min_value=0.0001,
+            value=10.0,
+            step=0.5,
+            help="Kd of Inhibitor to PRMT–MTA complex, in nM."
+        )
+
+        # 2) Selectivity factor (radio with 3 options)
+        selectivity_factor = st.radio(
+            "Selectivity factor (fold difference)",
+            options=[1.0, 10.0, 100.0],
+            index=1,  # default to 10
+            format_func=lambda x: f"{int(x)}-fold",
+            help="Ratio of Kd(Inhib–free) to Kd(Inhib–MTA). Also used for Kd(Inhib–SAM)."
+        )
+
+        st.write(f"**Example**: If Kd(Inhib–MTA) = {kd_inhib_mta_nM:.2f} nM, selectivity = {selectivity_factor}×, then:")
+        st.write(f"- Kd(Inhib–free) = {kd_inhib_mta_nM*selectivity_factor:.2f} nM")
+        st.write(f"- Kd(Inhib–SAM)  = {kd_inhib_mta_nM*selectivity_factor:.2f} nM")
 
         st.header("Inhibitor Range (nM)")
-        min_inhib_nM = st.number_input("Min [Inhibitor] (nM)", min_value=0.001, value=1.0, step=0.5, format="%.3f")
+        min_inhib_nM = st.number_input("Min [Inhibitor] (nM)", min_value=0.0001, value=0.01, step=0.5, format="%.3f")
         max_inhib_nM = st.number_input("Max [Inhibitor] (nM)", min_value=1.0, value=1e4, step=1000.0, format="%.1f")
         num_points   = st.slider("Number of log points", min_value=10, max_value=100, value=50)
+
+    # --- Convert user Kds (nM) to µM for calculations ---
+    kd_inhib_mta_uM = kd_inhib_mta_nM * 1e-3  # nM -> µM
+    kd_inhib_free_uM = (kd_inhib_mta_nM * selectivity_factor) * 1e-3
+    kd_inhib_sam_uM  = (kd_inhib_mta_nM * selectivity_factor) * 1e-3
 
     # --- Generate inhibitor array in nM (log space) ---
     I_values_nM = np.logspace(
@@ -117,40 +136,56 @@ def main():
 
         # PRMT5 - healthy
         fracs_5_h = compute_prmt_distribution(
-            M=MTA_healthy, Kd_PM=Kd_PM_5,
-            S=SAM_conc,    Kd_PS=Kd_PS_5,
+            M=MTA_healthy, 
+            Kd_PM=Kd_PM_5,
+            S=SAM_conc,
+            Kd_PS=Kd_PS_5,
             I=I_uM,
-            Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
+            Kd_PI=kd_inhib_free_uM,
+            Kd_PMI=kd_inhib_mta_uM,
+            Kd_PSI=kd_inhib_sam_uM
         )
         func_5_h = fracs_5_h["P_free"] + fracs_5_h["P_S"]
         prmt5_data["Healthy"].append(func_5_h)
 
         # PRMT5 - MTAP-del
         fracs_5_d = compute_prmt_distribution(
-            M=MTA_deleted, Kd_PM=Kd_PM_5,
-            S=SAM_conc,    Kd_PS=Kd_PS_5,
+            M=MTA_deleted, 
+            Kd_PM=Kd_PM_5,
+            S=SAM_conc,    
+            Kd_PS=Kd_PS_5,
             I=I_uM,
-            Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
+            Kd_PI=kd_inhib_free_uM,
+            Kd_PMI=kd_inhib_mta_uM,
+            Kd_PSI=kd_inhib_sam_uM
         )
         func_5_d = fracs_5_d["P_free"] + fracs_5_d["P_S"]
         prmt5_data["MTAP-deleted"].append(func_5_d)
 
         # PRMT1 - healthy
         fracs_1_h = compute_prmt_distribution(
-            M=MTA_healthy, Kd_PM=Kd_PM_1,
-            S=SAM_conc,    Kd_PS=Kd_PS_1,
+            M=MTA_healthy, 
+            Kd_PM=Kd_PM_1,
+            S=SAM_conc,
+            Kd_PS=Kd_PS_1,
             I=I_uM,
-            Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
+            Kd_PI=kd_inhib_free_uM,
+            Kd_PMI=kd_inhib_mta_uM,
+            Kd_PSI=kd_inhib_sam_uM
         )
         func_1_h = fracs_1_h["P_free"] + fracs_1_h["P_S"]
         prmt1_data["Healthy"].append(func_1_h)
 
         # PRMT1 - MTAP-del
         fracs_1_d = compute_prmt_distribution(
-            M=MTA_deleted, Kd_PM=Kd_PM_1,
-            S=SAM_conc,    Kd_PS=Kd_PS_1,
+            M=MTA_deleted,
+            Kd_PM=Kd_PM_1,
+            S=SAM_conc,
+            Kd_PS=Kd_PS_1,
             I=I_uM,
-            Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
+            Kd_PI=kd_inhib_free_uM,
+            Kd_PMI=kd_inhib_mta_uM,
+            Kd_PSI=kd_inhib_sam_uM
         )
         func_1_d = fracs_1_d["P_free"] + fracs_1_d["P_S"]
         prmt1_data["MTAP-deleted"].append(func_1_d)
@@ -162,7 +197,7 @@ def main():
     ###########################
     #  3) Altair Log-Scale Plot
     ###########################
-    st.subheader("PRMT5 Results (Log-scale x-axis)")
+    st.subheader("PRMT5 Inhibitor Effect (Functional Fraction vs. [Inhib])")
 
     # Melt wide -> long
     df5_long = df_prmt5.melt(
@@ -191,7 +226,7 @@ def main():
     )
     st.altair_chart(chart5, use_container_width=True)
 
-    st.subheader("PRMT1 Results (Log-scale x-axis)")
+    st.subheader("PRMT1 Inhibitor Effect (Functional Fraction vs. [Inhib])")
 
     # Melt wide -> long
     df1_long = df_prmt1.melt(
@@ -221,8 +256,14 @@ def main():
     st.altair_chart(chart1, use_container_width=True)
 
     st.markdown("---")
-    st.markdown("**Note**: The x-axis is in nM (log scale). You can adjust the range of inhibitor concentrations and other parameters in the sidebar, and the charts will update automatically.")
+    st.markdown("""
+    **Notes**:
+    - The slider controls *Kd(Inhib–MTA)* (in nM) and the *Selectivity factor*. 
+      - If selectivity = 1, there's no difference in Kd among free, MTA-bound, or SAM-bound.
+      - If selectivity = 10, the inhibitor is 10x tighter for MTA-bound vs. free or SAM-bound.
+    - X-axis is log-scale in nM.
+    - MTA, SAM, and the PRMT Kds are given in µM.
+    """)
 
 if __name__ == "__main__":
     main()
-
