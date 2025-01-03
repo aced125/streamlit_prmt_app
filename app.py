@@ -53,7 +53,7 @@ def main():
 
     st.markdown(
         """
-        This app computes the *functional fraction* of PRMT (bound to SAM and free) 
+        This app computes the *functional fraction* of PRMT (free PRMT + PRMT-SAM) 
         in **Healthy** vs. **MTAP-deleted** cells at varying inhibitor concentrations.
         """
     )
@@ -197,7 +197,7 @@ def main():
     ###########################
     #  3) Altair Log-Scale Plot
     ###########################
-    st.subheader("PRMT5 Inhibitor Effect (Functional Fraction vs. [Inhib])")
+    st.subheader(f"PRMT5i ({int(round(selectivity_factor))}x selective) Effect on Functional PRMT5")
 
     # Melt wide -> long
     df5_long = df_prmt5.melt(
@@ -217,7 +217,7 @@ def main():
             ),
             y=alt.Y(
                 "Fraction:Q",
-                title="Fraction (P_free + P_S)",
+                title="Functional PRMT5 Remaining",
                 scale=alt.Scale(domain=[0, 1])  # fraction range
             ),
             color=alt.Color("Condition:N", legend=alt.Legend(title="Cell Type"))
@@ -226,7 +226,7 @@ def main():
     )
     st.altair_chart(chart5, use_container_width=True)
 
-    st.subheader("PRMT1 Inhibitor Effect (Functional Fraction vs. [Inhib])")
+    st.subheader(f"PRMT1i ({int(round(selectivity_factor))}x selective) Effect on Functional PRMT1")
 
     # Melt wide -> long
     df1_long = df_prmt1.melt(
@@ -246,7 +246,7 @@ def main():
             ),
             y=alt.Y(
                 "Fraction:Q",
-                title="Fraction (P_free + P_S)",
+                title="Functional PRMT1 Remaining",
                 scale=alt.Scale(domain=[0, 1])
             ),
             color=alt.Color("Condition:N", legend=alt.Legend(title="Cell Type"))
