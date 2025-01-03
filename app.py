@@ -1,6 +1,7 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
+import numpy as np
+import altair as alt
 
 #############################
 #  1) Core Calculation
@@ -46,19 +47,25 @@ def compute_prmt_distribution(M, Kd_PM, S, Kd_PS, I, Kd_PI, Kd_PMI, Kd_PSI):
 
 
 #############################
-#  2) Streamlit UI
+#  2) Main Streamlit App
 #############################
 def main():
-    st.title("Interactive PRMT Inhibition App")
+    st.title("Interactive PRMT Inhibition App (Log-scale x-axis)")
 
     st.markdown(
         """
         This app computes the *functional fraction* of PRMT (i.e., \\(P_{\\mathrm{free}} + P_{S}\\)) 
-        under two cell conditions (Healthy vs. MTAP-deleted), for **both PRMT5 and PRMT1**. 
-        Adjust the parameters in the sidebar to see how the curves change!
+        under two cell conditions (**Healthy** vs. **MTAP-deleted**), for both **PRMT5** and **PRMT1**. 
+        It uses **Altair** to display the x-axis in *log scale*.  
+        
+        **Instructions**:  
+        1. Adjust the parameters in the sidebar (MTA, SAM, Kd values, etc.).  
+        2. A range of inhibitor concentrations (in nM) is swept on a *log scale*.  
+        3. See how the “functional fraction” curves shift for PRMT5 and PRMT1!
         """
     )
 
+    # --- Sidebar Inputs ---
     with st.sidebar:
         st.header("Cell Conditions")
         MTA_healthy = st.number_input("MTA (Healthy) [µM]", min_value=0.0, value=1.0, step=0.1)
@@ -66,108 +73,155 @@ def main():
         SAM_conc    = st.number_input("SAM [µM]", min_value=0.0, value=50.0, step=1.0)
         
         st.header("PRMT5 Kd (µM)")
-        Kd_PM_5 = st.number_input("Kd(PRMT5–MTA) [µM]", min_value=0.0001, value=5.0, step=0.1)
-        Kd_PS_5 = st.number_input("Kd(PRMT5–SAM) [µM]", min_value=0.0001, value=10.0, step=0.1)
+        Kd_PM_5 = st.number_input("Kd(PRMT5–MTA)", min_value=0.0001, value=5.0, step=0.1)
+        Kd_PS_5 = st.number_input("Kd(PRMT5–SAM)", min_value=0.0001, value=10.0, step=0.1)
         
         st.header("PRMT1 Kd (µM)")
-        Kd_PM_1 = st.number_input("Kd(PRMT1–MTA) [µM]", min_value=0.0001, value=50.0, step=1.0)
-        Kd_PS_1 = st.number_input("Kd(PRMT1–SAM) [µM]", min_value=0.0001, value=10.0, step=0.1)
+        Kd_PM_1 = st.number_input("Kd(PRMT1–MTA)", min_value=0.0001, value=50.0, step=1.0)
+        Kd_PS_1 = st.number_input("Kd(PRMT1–SAM)", min_value=0.0001, value=10.0, step=0.1)
 
         st.header("Inhibitor Kd (µM)")
-        Kd_PI   = st.number_input("Kd(Inhib–free) [µM]", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
-        Kd_PMI  = st.number_input("Kd(Inhib–MTA-bound) [µM]", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
-        Kd_PSI  = st.number_input("Kd(Inhib–SAM-bound) [µM]", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
+        Kd_PI   = st.number_input("Kd(Inhib–free)", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
+        Kd_PMI  = st.number_input("Kd(Inhib–MTA-bound)", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
+        Kd_PSI  = st.number_input("Kd(Inhib–SAM-bound)", min_value=0.000001, value=0.004, step=0.001, format="%.6f")
 
         st.header("Inhibitor Range (nM)")
         min_inhib_nM = st.number_input("Min [Inhibitor] (nM)", min_value=0.001, value=1.0, step=0.5, format="%.3f")
         max_inhib_nM = st.number_input("Max [Inhibitor] (nM)", min_value=1.0, value=1e4, step=1000.0, format="%.1f")
-        num_points   = st.slider("Number of points in log range", min_value=10, max_value=100, value=50)
-    
-    # Create array of inhibitor concentrations in nM
-    I_values_nM = np.logspace(np.log10(min_inhib_nM), np.log10(max_inhib_nM), num_points)
+        num_points   = st.slider("Number of log points", min_value=10, max_value=100, value=50)
 
-    # We'll build data frames for PRMT5 and PRMT1 to show in line charts.
-    # Each data frame has columns:
-    #   "Inhibitor (nM)", "Healthy", "MTAP-deleted"
-    # so we can do st.line_chart(...) specifying y=["Healthy", "MTAP-deleted"] if we want.
+    # --- Generate inhibitor array in nM (log space) ---
+    I_values_nM = np.logspace(
+        np.log10(min_inhib_nM),
+        np.log10(max_inhib_nM),
+        num_points
+    )
+
+    # --- Prepare PRMT5 data (wide format) ---
     prmt5_data = {
         "Inhibitor (nM)": I_values_nM,
         "Healthy": [],
         "MTAP-deleted": []
     }
+
+    # --- Prepare PRMT1 data (wide format) ---
     prmt1_data = {
         "Inhibitor (nM)": I_values_nM,
         "Healthy": [],
         "MTAP-deleted": []
     }
 
+    # --- Calculate functional fraction for each row ---
     for InM in I_values_nM:
-        I_uM = InM * 1e-3  # convert nM -> µM
+        I_uM = InM * 1e-3  # Convert nM -> µM
 
         # PRMT5 - healthy
-        fracs_5_healthy = compute_prmt_distribution(
+        fracs_5_h = compute_prmt_distribution(
             M=MTA_healthy, Kd_PM=Kd_PM_5,
             S=SAM_conc,    Kd_PS=Kd_PS_5,
             I=I_uM,
             Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
         )
-        func_5_healthy = fracs_5_healthy["P_free"] + fracs_5_healthy["P_S"]
-        prmt5_data["Healthy"].append(func_5_healthy)
+        func_5_h = fracs_5_h["P_free"] + fracs_5_h["P_S"]
+        prmt5_data["Healthy"].append(func_5_h)
 
-        # PRMT5 - MTAP-deleted
-        fracs_5_deleted = compute_prmt_distribution(
+        # PRMT5 - MTAP-del
+        fracs_5_d = compute_prmt_distribution(
             M=MTA_deleted, Kd_PM=Kd_PM_5,
             S=SAM_conc,    Kd_PS=Kd_PS_5,
             I=I_uM,
             Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
         )
-        func_5_deleted = fracs_5_deleted["P_free"] + fracs_5_deleted["P_S"]
-        prmt5_data["MTAP-deleted"].append(func_5_deleted)
+        func_5_d = fracs_5_d["P_free"] + fracs_5_d["P_S"]
+        prmt5_data["MTAP-deleted"].append(func_5_d)
 
         # PRMT1 - healthy
-        fracs_1_healthy = compute_prmt_distribution(
+        fracs_1_h = compute_prmt_distribution(
             M=MTA_healthy, Kd_PM=Kd_PM_1,
             S=SAM_conc,    Kd_PS=Kd_PS_1,
             I=I_uM,
             Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
         )
-        func_1_healthy = fracs_1_healthy["P_free"] + fracs_1_healthy["P_S"]
-        prmt1_data["Healthy"].append(func_1_healthy)
+        func_1_h = fracs_1_h["P_free"] + fracs_1_h["P_S"]
+        prmt1_data["Healthy"].append(func_1_h)
 
-        # PRMT1 - MTAP-deleted
-        fracs_1_deleted = compute_prmt_distribution(
+        # PRMT1 - MTAP-del
+        fracs_1_d = compute_prmt_distribution(
             M=MTA_deleted, Kd_PM=Kd_PM_1,
             S=SAM_conc,    Kd_PS=Kd_PS_1,
             I=I_uM,
             Kd_PI=Kd_PI,   Kd_PMI=Kd_PMI, Kd_PSI=Kd_PSI
         )
-        func_1_deleted = fracs_1_deleted["P_free"] + fracs_1_deleted["P_S"]
-        prmt1_data["MTAP-deleted"].append(func_1_deleted)
+        func_1_d = fracs_1_d["P_free"] + fracs_1_d["P_S"]
+        prmt1_data["MTAP-deleted"].append(func_1_d)
 
-    # Convert to DataFrame
+    # --- Convert to DataFrame (wide format) ---
     df_prmt5 = pd.DataFrame(prmt5_data)
     df_prmt1 = pd.DataFrame(prmt1_data)
 
-    st.subheader("PRMT5 Results")
-    st.write("Fraction of PRMT5 that is free + SAM-bound vs. [Inhibitor] (nM)")
-    st.line_chart(
-        data=df_prmt5,
-        x="Inhibitor (nM)",
-        y=["Healthy", "MTAP-deleted"],
-        use_container_width=True
+    ###########################
+    #  3) Altair Log-Scale Plot
+    ###########################
+    st.subheader("PRMT5 Results (Log-scale x-axis)")
+
+    # Melt wide -> long
+    df5_long = df_prmt5.melt(
+        id_vars="Inhibitor (nM)", 
+        var_name="Condition",
+        value_name="Fraction"
     )
 
-    st.subheader("PRMT1 Results")
-    st.write("Fraction of PRMT1 that is free + SAM-bound vs. [Inhibitor] (nM)")
-    st.line_chart(
-        data=df_prmt1,
-        x="Inhibitor (nM)",
-        y=["Healthy", "MTAP-deleted"],
-        use_container_width=True
+    chart5 = (
+        alt.Chart(df5_long)
+        .mark_line()
+        .encode(
+            x=alt.X(
+                "Inhibitor (nM):Q",
+                title="[Inhibitor] (nM)",
+                scale=alt.Scale(type="log")
+            ),
+            y=alt.Y(
+                "Fraction:Q",
+                title="Fraction (P_free + P_S)",
+                scale=alt.Scale(domain=[0, 1])  # fraction range
+            ),
+            color=alt.Color("Condition:N", legend=alt.Legend(title="Cell Type"))
+        )
+        .properties(width="container", height=400)
     )
+    st.altair_chart(chart5, use_container_width=True)
+
+    st.subheader("PRMT1 Results (Log-scale x-axis)")
+
+    # Melt wide -> long
+    df1_long = df_prmt1.melt(
+        id_vars="Inhibitor (nM)",
+        var_name="Condition",
+        value_name="Fraction"
+    )
+
+    chart1 = (
+        alt.Chart(df1_long)
+        .mark_line()
+        .encode(
+            x=alt.X(
+                "Inhibitor (nM):Q",
+                title="[Inhibitor] (nM)",
+                scale=alt.Scale(type="log")
+            ),
+            y=alt.Y(
+                "Fraction:Q",
+                title="Fraction (P_free + P_S)",
+                scale=alt.Scale(domain=[0, 1])
+            ),
+            color=alt.Color("Condition:N", legend=alt.Legend(title="Cell Type"))
+        )
+        .properties(width="container", height=400)
+    )
+    st.altair_chart(chart1, use_container_width=True)
 
     st.markdown("---")
-    st.markdown("**Tip**: Try changing the parameters in the sidebar (Kd values, cell conditions, etc.) to see how the curves move in real time!")
+    st.markdown("**Note**: The x-axis is in nM (log scale). You can adjust the range of inhibitor concentrations and other parameters in the sidebar, and the charts will update automatically.")
 
 if __name__ == "__main__":
     main()
